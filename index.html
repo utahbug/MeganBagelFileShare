@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex,nofollow,noarchive" />
+    <meta name="description" content="Temporary encrypted file sharing via GitHub Releases." />
+    <title>File Share</title>
+    <link rel="stylesheet" href="styles.css" />
+    <link rel="icon" type="image/svg+xml" href="assets/share-icon.svg" />
+  </head>
+  <body>
+    <div id="app" class="app-shell" role="application">
+      <header class="topbar">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true">⧉</div>
+          <div>
+            <p class="brand-label">File Share</p>
+            <p class="brand-kicker">Temporary file exchange</p>
+          </div>
+        </div>
+        <p class="notice">Temporary storage — delete after successful transfer.</p>
+      </header>
+      <main>
+        <section id="recipient-view" class="panel card hidden" aria-live="polite"></section>
+        <section id="owner-view" class="panel card"></section>
+      </main>
+    </div>
+    <script type="module" src="scripts/main.js"></script>
+  </body>
+</html>
+

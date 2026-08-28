@@ -1,0 +1,19 @@
+{
+  "name": "megan-bagel-file-share",
+  "version": "0.1.0",
+  "description": "Temporary file-sharing application using GitHub Releases with client-side encryption.",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node scripts/run-tests.mjs",
+    "lint": "node scripts/lint.mjs"
+  },
+  "keywords": [
+    "file-sharing",
+    "github",
+    "crypto",
+    "typescript"
+  ]
+}
+
