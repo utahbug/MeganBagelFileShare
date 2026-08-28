@@ -92,8 +92,66 @@ body {
   margin-bottom: 1rem;
 }
 
+.section-card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 1rem;
+  margin-bottom: 1rem;
+}
+
 .card {
   animation: slide-up 0.24s ease;
+}
+
+.inline-input-row {
+  display: flex;
+  gap: 0.45rem;
+  align-items: center;
+}
+
+.inline-input-row .btn-inline {
+  height: 2.1rem;
+}
+
+.inline-input-row input[type="password"],
+.inline-input-row input[type="text"] {
+  margin: 0;
+}
+
+.hidden-file-input {
+  display: none;
+}
+
+.drop-zone {
+  border: 1px dashed #bfd1f1;
+  border-radius: 10px;
+  padding: 1rem;
+  background: #f7faff;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 120ms ease, background-color 120ms ease;
+}
+
+.drop-zone:hover {
+  border-color: var(--accent);
+  background: #eff4ff;
+}
+
+.drop-zone:focus-visible {
+  outline: 3px solid #8cb2ff;
+  outline-offset: 2px;
+}
+
+.drop-zone--active {
+  border-color: var(--accent);
+  background: #eaf1ff;
+}
+
+.drop-zone-title {
+  margin: 0 0 0.35rem;
+  color: #1f3554;
 }
 
 @keyframes slide-up {
@@ -367,4 +425,3 @@ footer {
     grid-column: span 12;
   }
 }
-

@@ -4,7 +4,7 @@ import { deriveKey, decryptTextObject, decryptBuffer, humanBytes, toBase64 } fro
 import { getDropIdFromLocation } from "../utils/routing.js";
 import { formatDropAge } from "../lib/dropModel.js";
 
-export async function renderRecipientView(root, { setMode, onNotify }) {
+export async function renderRecipientView(root, { onNotify }) {
   const dropId = getDropIdFromLocation();
   if (!dropId) {
     root.classList.add("hidden");
@@ -13,19 +13,17 @@ export async function renderRecipientView(root, { setMode, onNotify }) {
 
   const tagName = `mbs-drop-${dropId}`;
   root.innerHTML = `
-    <h2 class="section-title">Secure drop access</h2>
-    <p class="inline-note">
-      Temporary file exchange<br />
-      Files are password-protected for convenience but should not be considered completely secure. Download the files you need and avoid leaving sensitive material online longer than necessary.
-    </p>
+    <h2 class="section-title">Open Share</h2>
+    <p class="inline-note">Enter the Share password to unlock files.</p>
     <div class="grid" id="recipientGate">
-      <label for="dropPassword">Drop password</label>
-      <input id="dropPassword" type="password" autocomplete="new-password" />
-      <div class="button-row">
-        <button id="unlockDrop" class="btn-primary">Unlock drop</button>
-        <button id="openOwnerMode" class="btn-plain btn-inline">Owner mode</button>
+      <label for="dropPassword">Share password</label>
+      <div class="inline-input-row">
+        <input id="dropPassword" type="password" autocomplete="new-password" />
+        <button id="toggleRecipientPassword" class="btn-plain btn-inline" type="button">Show</button>
       </div>
-      <p class="muted small">If this is your own drop, use Owner Mode for link management and deletion.</p>
+      <div class="button-row">
+        <button id="unlockDrop" class="btn-primary">Unlock share</button>
+      </div>
       <p class="small" id="recipientStatus" aria-live="polite"></p>
     </div>
     <div id="contentArea" class="hidden">
@@ -39,7 +37,7 @@ export async function renderRecipientView(root, { setMode, onNotify }) {
 
   const passwordInput = root.querySelector("#dropPassword");
   const unlockDrop = root.querySelector("#unlockDrop");
-  const openOwnerMode = root.querySelector("#openOwnerMode");
+  const toggleRecipientPassword = root.querySelector("#toggleRecipientPassword");
   const recipientStatus = root.querySelector("#recipientStatus");
   const contentArea = root.querySelector("#contentArea");
   const dropHeader = root.querySelector("#dropHeader");
@@ -50,18 +48,28 @@ export async function renderRecipientView(root, { setMode, onNotify }) {
   let manifest = null;
   let decryptedFiles = [];
 
+  toggleRecipientPassword.addEventListener("click", () => {
+    const show = toggleRecipientPassword.textContent === "Show";
+    toggleRecipientPassword.textContent = show ? "Hide" : "Show";
+    passwordInput.type = show ? "text" : "password";
+  });
+
   unlockDrop.addEventListener("click", async () => {
     const password = passwordInput.value;
-    recipientStatus.textContent = "Unlocking…";
+    if (!password) {
+      recipientStatus.textContent = "Enter the share password first.";
+      return;
+    }
+    recipientStatus.textContent = "Unlocking share…";
     manifest = null;
     try {
       const release = await client.getReleaseByTag(tagName);
       if (!release?.assets?.length) {
-        throw new Error("Drop not found or expired.");
+        throw new Error("Share not found or expired.");
       }
       const manifestAsset = release.assets.find((asset) => asset.name.startsWith("manifest-") && asset.name.endsWith(".enc"));
       if (!manifestAsset) {
-        throw new Error("Drop manifest missing.");
+        throw new Error("Share manifest missing.");
       }
 
       const manifestPayload = await fetch(manifestAsset.browser_download_url).then((response) => {
@@ -73,7 +81,7 @@ export async function renderRecipientView(root, { setMode, onNotify }) {
       const manifestKey = await deriveKey(password, manifestPayload.salt);
       const decrypted = await decryptTextObject(manifestPayload, manifestKey);
       if (!decrypted?.files?.length || !decrypted.salt) {
-        throw new Error("Manifest has no files.");
+        throw new Error("Share manifest has no files.");
       }
       manifest = decrypted;
 
@@ -90,7 +98,6 @@ export async function renderRecipientView(root, { setMode, onNotify }) {
           return `<article class="file-row">
             <p class="file-name">${escapeHtml(file.originalName || "Unnamed file")}</p>
             <p class="small">${humanBytes(file.size || 0)} · ${file.mimeType || "application/octet-stream"}</p>
-            <label class="small"><input type="checkbox" class="file-select" data-file="${file.id}" checked /> include</label>
             <div class="row-actions">
               <button class="btn-primary btn-inline" data-action="download-file" data-file="${file.id}">Download</button>
               ${isImage ? `<button class="btn-ghost btn-inline" data-action="copy-file" data-file="${file.id}">Copy image</button>` : ""}
@@ -103,11 +110,10 @@ export async function renderRecipientView(root, { setMode, onNotify }) {
         ...file,
         asset: release.assets.find((asset) => asset.name === file.assetName),
       })).filter((entry) => entry.asset);
-      recipientStatus.textContent = "Drop unlocked.";
+      recipientStatus.textContent = "Share unlocked.";
       contentArea.classList.remove("hidden");
     } catch (error) {
-      recipientStatus.textContent = "";
-      alert(`Unable to unlock: ${error.message}`);
+      recipientStatus.textContent = `Unable to unlock share: ${error.message}`;
     }
   });
 
@@ -152,9 +158,8 @@ export async function renderRecipientView(root, { setMode, onNotify }) {
       btn?.click();
       await new Promise((resolve) => setTimeout(resolve, 120));
     }
+    onNotify?.("Downloads started.");
   });
-
-  openOwnerMode.addEventListener("click", () => setMode("owner"));
 }
 
 function downloadBlob(blob, filename) {
@@ -173,4 +178,3 @@ function escapeHtml(value) {
   span.textContent = value;
   return span.innerHTML;
 }
-

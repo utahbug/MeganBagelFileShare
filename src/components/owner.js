@@ -9,7 +9,16 @@ import {
 } from "../lib/config.js";
 import { GitHubClient } from "../services/github.js";
 import { createDropEnvelope, formatDropAge } from "../lib/dropModel.js";
-import { randomId, deriveKey, encryptBuffer, readFileAsArrayBuffer, encryptTextObject, toBase64, fromBase64, humanBytes } from "../utils/crypto.js";
+import {
+  randomId,
+  deriveKey,
+  encryptBuffer,
+  readFileAsArrayBuffer,
+  encryptTextObject,
+  toBase64,
+  fromBase64,
+  humanBytes,
+} from "../utils/crypto.js";
 import { shareUrlForId } from "../utils/routing.js";
 
 const PERSISTENT_TOKEN_KEY = "mbfs_owner_token_persistent_v1";
@@ -64,50 +73,98 @@ function clearSavedToken() {
   sessionStorage.removeItem(TOKEN_SESSION_KEY);
 }
 
-export function renderOwnerView(root, { setMode, onNotify }) {
+function formatSelectedFilesLabel(selected) {
+  if (!selected.length) {
+    return "No files selected";
+  }
+  const total = selected.reduce((acc, file) => acc + file.size, 0);
+  return `${selected.length} files selected · ${humanBytes(total)}`;
+}
+
+export function renderOwnerView(root, { onNotify }) {
   root.innerHTML = `
-    <h2 class="section-title">Owner dashboard</h2>
-    <p class="muted small">Share only temporary encrypted drops. Passwords never leave the browser.</p>
-    <div class="grid">
-      <section class="grid">
-        <h3>GitHub config</h3>
-        <div class="field-grid">
-          <div class="field"><label for="githubOwner">GitHub owner</label><input id="githubOwner" type="text" value="${DEFAULT_GITHUB_CONFIG.owner}" /></div>
-          <div class="field"><label for="githubRepo">GitHub repository</label><input id="githubRepo" type="text" value="${DEFAULT_GITHUB_CONFIG.repo}" /></div>
-          <div class="field"><label for="githubToken">GitHub token (owner only)</label><input id="githubToken" type="password" autocomplete="off" placeholder="Session-only by default" /></div>
-          <div class="field">
-            <label><input id="rememberToken" type="checkbox" /> Remember token on this device</label>
-            <div class="small muted">Optional: stores token in local browser storage on this computer.</div>
+    <h2 class="section-title">Owner Dashboard</h2>
+    <p class="muted small">Temporary file exchange · owner controls</p>
+
+    <section class="section-card">
+      <h3>Connection</h3>
+      <div class="field-grid">
+        <div class="field">
+          <label for="githubOwner">GitHub owner</label>
+          <input id="githubOwner" type="text" value="${DEFAULT_GITHUB_CONFIG.owner}" />
+        </div>
+        <div class="field">
+          <label for="githubRepo">GitHub repository</label>
+          <input id="githubRepo" type="text" value="${DEFAULT_GITHUB_CONFIG.repo}" />
+        </div>
+        <div class="field">
+          <label for="githubToken">GitHub token</label>
+          <div class="inline-input-row">
+            <input id="githubToken" type="password" autocomplete="off" placeholder="Session-only by default" />
+            <button id="toggleOwnerToken" class="btn-plain btn-inline" type="button">Show</button>
           </div>
-          <div class="field"><button id="forgetToken" class="btn-plain btn-inline">Forget GitHub credentials</button></div>
+          <p class="small muted">Owner token is required for creating and deleting Shares.</p>
         </div>
-        <div class="button-row">
-          <button id="saveConfig" class="btn-primary">Save config</button>
-          <button id="refreshDrops" class="btn-plain btn-inline">Refresh drops</button>
+        <div class="field">
+          <label><input id="rememberToken" type="checkbox" /> Remember token on this device</label>
+          <p class="small muted">Optional: keeps your token on this browser only.</p>
         </div>
-      </section>
+        <div class="field"><button id="forgetToken" class="btn-plain btn-inline">Forget GitHub credentials</button></div>
+        <div class="field">
+          <div class="button-row">
+            <button id="saveConfig" class="btn-primary">Save connection</button>
+          </div>
+        </div>
+      </div>
+    </section>
 
-      <section class="grid">
-        <h3>Create new Drop</h3>
-        <p id="storageLimitNotice" class="inline-note small"></p>
-        <div class="field-grid">
-          <div class="field"><label for="dropName">Drop name</label><input id="dropName" type="text" value="Family Photos" /></div>
-          <div class="field"><label for="dropPassword">Password</label><input id="dropPassword" type="password" autocomplete="new-password" /></div>
-          <div class="field"><label for="dropFiles">Files</label><input id="dropFiles" type="file" multiple /></div>
+    <section class="section-card">
+      <h3>Create a Share</h3>
+      <p id="storageLimitNotice" class="small muted">Limits: ${humanBytes(APP_SINGLE_FILE_BYTES)} per file and ${humanBytes(APP_TOTAL_BYTES)} per Share.</p>
+      <div class="field-grid">
+        <div class="field">
+          <label for="shareName">Share name</label>
+          <input id="shareName" type="text" value="Family Photos" />
         </div>
-        <div class="inline-note small">Files are encrypted in your browser before upload using a password-derived key.</div>
-        <div class="progress" id="createProgress" aria-live="polite"></div>
-        <div class="button-row">
-          <button id="createDrop" class="btn-secondary">Create Drop</button>
-          <button id="clearDropForm" class="btn-ghost">Clear</button>
+        <div class="field">
+          <label for="sharePassword">Password</label>
+          <div class="inline-input-row">
+            <input id="sharePassword" type="password" autocomplete="new-password" />
+            <button id="toggleSharePassword" class="btn-plain btn-inline" type="button">Show</button>
+          </div>
         </div>
-      </section>
+        <div class="field">
+          <label for="sharePasswordConfirm">Confirm password</label>
+          <div class="inline-input-row">
+            <input id="sharePasswordConfirm" type="password" autocomplete="new-password" />
+            <button id="toggleSharePasswordConfirm" class="btn-plain btn-inline" type="button">Show</button>
+          </div>
+          <p id="passwordHelper" class="small muted" role="status" aria-live="polite">Recipients will need this password to open the Share.</p>
+        </div>
+        <div class="field">
+          <label for="shareFilesInput">Files</label>
+          <div id="shareDropZone" class="drop-zone" role="button" tabindex="0" aria-label="Upload files">
+            <p class="drop-zone-title">Drop files here</p>
+            <p class="small muted">or choose files</p>
+            <p class="small muted" id="selectedFileSummary">No files selected</p>
+          </div>
+          <input id="shareFilesInput" type="file" multiple class="hidden-file-input" />
+        </div>
+      </div>
 
-      <section class="grid">
-        <h3>Your Drops</h3>
-        <div id="dropsList" class="drop-list"></div>
-      </section>
-    </div>
+      <div class="inline-note small">Files are encrypted in your browser before upload. Your password is not stored with the files.</div>
+      <p id="ownerStatus" class="status status-warning small" role="alert" aria-live="polite"></p>
+      <div class="progress" id="createProgress" aria-live="polite"></div>
+      <div class="button-row">
+        <button id="createShare" class="btn-primary">Create Share</button>
+        <button id="clearShareForm" class="btn-plain">Clear</button>
+      </div>
+    </section>
+
+    <section class="section-card">
+      <h3>Your Shares</h3>
+      <div id="dropsList" class="drop-list"></div>
+    </section>
   `;
 
   const githubOwner = root.querySelector("#githubOwner");
@@ -116,27 +173,94 @@ export function renderOwnerView(root, { setMode, onNotify }) {
   const rememberToken = root.querySelector("#rememberToken");
   const forgetToken = root.querySelector("#forgetToken");
   const saveConfig = root.querySelector("#saveConfig");
-  const refreshDrops = root.querySelector("#refreshDrops");
-  const createDrop = root.querySelector("#createDrop");
-  const clearDropForm = root.querySelector("#clearDropForm");
-  const dropName = root.querySelector("#dropName");
-  const dropPassword = root.querySelector("#dropPassword");
-  const dropFiles = root.querySelector("#dropFiles");
+  const toggleOwnerToken = root.querySelector("#toggleOwnerToken");
+  const shareName = root.querySelector("#shareName");
+  const sharePassword = root.querySelector("#sharePassword");
+  const sharePasswordConfirm = root.querySelector("#sharePasswordConfirm");
+  const passwordHelper = root.querySelector("#passwordHelper");
+  const toggleSharePassword = root.querySelector("#toggleSharePassword");
+  const toggleSharePasswordConfirm = root.querySelector("#toggleSharePasswordConfirm");
+  const shareFilesInput = root.querySelector("#shareFilesInput");
+  const shareDropZone = root.querySelector("#shareDropZone");
+  const selectedSummary = root.querySelector("#selectedFileSummary");
+  const status = root.querySelector("#ownerStatus");
   const progress = root.querySelector("#createProgress");
-  const storageLimitNotice = root.querySelector("#storageLimitNotice");
+  const createShare = root.querySelector("#createShare");
+  const clearShareForm = root.querySelector("#clearShareForm");
 
   const settings = ownerSettings();
   githubOwner.value = settings.owner;
   githubRepo.value = settings.repo;
+
   const isRemembered = localStorage.getItem(TOKEN_REMEMBER_KEY) === "1";
   rememberToken.checked = isRemembered;
   githubToken.value = getSavedToken(isRemembered);
-  storageLimitNotice.textContent = `Limits (app): file ≤ ${humanBytes(APP_SINGLE_FILE_BYTES)}, drop ≤ ${humanBytes(APP_TOTAL_BYTES)}. GitHub releases can support much larger payloads; these limits are conservative to keep mobile browsers stable.`;
+
+  let selectedFiles = [];
+
+  function setFiles(files) {
+    selectedFiles = files;
+    selectedSummary.textContent = formatSelectedFilesLabel(selectedFiles);
+    if (selectedFiles.length) {
+      status.textContent = "";
+    }
+  }
+
+  function renderPasswordError(message) {
+    status.textContent = message || "";
+    status.className = message ? "status status-bad small" : "status status-warning small";
+  }
+
+  function updateSummaryOnPassword() {
+    const pass = sharePassword.value.trim();
+    const confirm = sharePasswordConfirm.value.trim();
+    if (!pass || !confirm) {
+      passwordHelper.textContent = "Recipients will need this password to open the Share.";
+      return;
+    }
+    if (pass !== confirm) {
+      passwordHelper.textContent = "Passwords do not match. Please make them the same.";
+      status.textContent = "Passwords do not match.";
+      status.className = "status status-bad small";
+      return;
+    }
+    passwordHelper.textContent = "Recipients will need this password to open the Share.";
+    if (pass.length >= 6) {
+      passwordHelper.textContent = "Looks good. Recipients will need this password to open the Share.";
+    }
+    if (status && status.textContent === "Passwords do not match.") {
+      status.textContent = "";
+    }
+  }
 
   const getClient = () => new GitHubClient({
     owner: githubOwner.value.trim(),
     repo: githubRepo.value.trim(),
     token: githubToken.value.trim(),
+  });
+
+  shareDropZone.addEventListener("click", () => shareFilesInput.click());
+  shareDropZone.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      shareFilesInput.click();
+    }
+  });
+  shareFilesInput.addEventListener("change", () => setFiles(Array.from(shareFilesInput.files || [])));
+  shareDropZone.addEventListener("dragover", (event) => {
+    event.preventDefault();
+    shareDropZone.classList.add("drop-zone--active");
+  });
+  shareDropZone.addEventListener("dragleave", () => shareDropZone.classList.remove("drop-zone--active"));
+  shareDropZone.addEventListener("drop", (event) => {
+    event.preventDefault();
+    shareDropZone.classList.remove("drop-zone--active");
+    setFiles(Array.from(event.dataTransfer.files || []));
+    const dt = new DataTransfer();
+    for (const file of selectedFiles) {
+      dt.items.add(file);
+    }
+    shareFilesInput.files = dt.files;
   });
 
   saveConfig.addEventListener("click", () => {
@@ -153,6 +277,7 @@ export function renderOwnerView(root, { setMode, onNotify }) {
     clearSavedToken();
     githubToken.value = "";
     rememberToken.checked = false;
+    setSavedToken("", false);
     onNotify("GitHub credentials have been cleared.");
   });
 
@@ -164,39 +289,68 @@ export function renderOwnerView(root, { setMode, onNotify }) {
     setSavedToken(githubToken.value.trim(), rememberToken.checked);
   });
 
-  clearDropForm.addEventListener("click", () => {
-    dropName.value = "Family Photos";
-    dropPassword.value = "";
-    dropFiles.value = "";
+  toggleOwnerToken.addEventListener("click", () => {
+    const show = toggleOwnerToken.textContent === "Show";
+    toggleOwnerToken.textContent = show ? "Hide" : "Show";
+    githubToken.type = show ? "text" : "password";
   });
 
-  refreshDrops.addEventListener("click", () => {
-    listDrops(root);
+  toggleSharePassword.addEventListener("click", () => {
+    const show = toggleSharePassword.textContent === "Show";
+    toggleSharePassword.textContent = show ? "Hide" : "Show";
+    sharePassword.type = show ? "text" : "password";
+    if (show) {
+      sharePassword.focus();
+    }
   });
 
-  createDrop.addEventListener("click", async () => {
+  toggleSharePasswordConfirm.addEventListener("click", () => {
+    const show = toggleSharePasswordConfirm.textContent === "Show";
+    toggleSharePasswordConfirm.textContent = show ? "Hide" : "Show";
+    sharePasswordConfirm.type = show ? "text" : "password";
+    if (show) {
+      sharePasswordConfirm.focus();
+    }
+  });
+
+  sharePassword.addEventListener("input", updateSummaryOnPassword);
+  sharePasswordConfirm.addEventListener("input", updateSummaryOnPassword);
+
+  clearShareForm.addEventListener("click", () => {
+    shareName.value = "Family Photos";
+    sharePassword.value = "";
+    sharePasswordConfirm.value = "";
+    shareFilesInput.value = "";
+    selectedFiles = [];
+    selectedSummary.textContent = "No files selected";
+    renderPasswordError("");
+  });
+
+  createShare.addEventListener("click", async () => {
     try {
-      const selected = Array.from(dropFiles.files || []);
-      if (!selected.length) {
-        onNotify("Select at least one file first.");
+      if (!selectedFiles.length) {
+        renderPasswordError("Select at least one file first.");
         return;
       }
-      if (!dropPassword.value.trim()) {
-        onNotify("Password is required.");
+      if (!sharePassword.value.trim()) {
+        renderPasswordError("Password is required.");
+        return;
+      }
+      if (sharePassword.value !== sharePasswordConfirm.value) {
+        renderPasswordError("Passwords do not match.");
         return;
       }
       if (!githubToken.value.trim()) {
-        onNotify("Owner token is required to create a new Drop.");
+        renderPasswordError("Owner token is required to create a new Share.");
         return;
       }
-
-      const total = selected.reduce((acc, file) => acc + file.size, 0);
-      if (selected.some((f) => f.size > APP_SINGLE_FILE_BYTES)) {
-        onNotify(`Each file must be under ${humanBytes(APP_SINGLE_FILE_BYTES)} for this app version.`);
+      const total = selectedFiles.reduce((acc, file) => acc + file.size, 0);
+      if (selectedFiles.some((f) => f.size > APP_SINGLE_FILE_BYTES)) {
+        renderPasswordError(`Each file must be under ${humanBytes(APP_SINGLE_FILE_BYTES)} for this app version.`);
         return;
       }
       if (total > APP_TOTAL_BYTES) {
-        onNotify(`Total upload would exceed ${humanBytes(APP_TOTAL_BYTES)}.`);
+        renderPasswordError(`Total upload would exceed ${humanBytes(APP_TOTAL_BYTES)}.`);
         return;
       }
 
@@ -206,11 +360,11 @@ export function renderOwnerView(root, { setMode, onNotify }) {
       const salt = new Uint8Array(16);
       crypto.getRandomValues(salt);
       const saltB64 = toBase64(salt);
-      const key = await deriveKey(dropPassword.value, saltB64);
+      const key = await deriveKey(sharePassword.value, saltB64);
       const fileInfos = [];
 
       progress.textContent = "Encrypting files...";
-      for (const file of selected) {
+      for (const file of selectedFiles) {
         const arrayBuffer = await readFileAsArrayBuffer(file);
         const encrypted = await encryptBuffer(arrayBuffer, key);
         const encryptedFile = new Blob([fromBase64(encrypted.ciphertext)], {
@@ -227,16 +381,16 @@ export function renderOwnerView(root, { setMode, onNotify }) {
         fileInfos.push({ ...info, blob: encryptedFile });
       }
 
-      const manifest = createDropEnvelope(dropName.value.trim() || "Untitled Drop", saltB64, fileInfos.map((file) => {
+      const manifest = createDropEnvelope(shareName.value.trim() || "Untitled Share", saltB64, fileInfos.map((file) => {
         const { blob, ...safeInfo } = file;
         return safeInfo;
       }));
       const encryptedManifest = await encryptTextObject(manifest, key);
       const manifestBlob = new Blob([JSON.stringify(encryptedManifest)], { type: "application/json" });
-      const releaseName = `${Math.trunc(Date.now() / 1000)}-${dropName.value.trim() || "drop"}`;
+      const releaseName = `${Math.trunc(Date.now() / 1000)}-${shareName.value.trim() || "share"}`;
 
-      progress.textContent = "Creating release...";
-      const release = await client.createRelease(dropTag, releaseName, "Temporary encrypted drop.");
+      progress.textContent = "Creating Share...";
+      const release = await client.createRelease(dropTag, releaseName, "Temporary encrypted Share.");
       const uploadUrl = release.upload_url;
 
       progress.textContent = "Uploading manifest and files...";
@@ -246,16 +400,19 @@ export function renderOwnerView(root, { setMode, onNotify }) {
       }
 
       const shareUrl = shareUrlForId(dropId);
-      const details = `Drop created.\nShare link: ${shareUrl}\nTag: ${dropTag}\nRepository: ${client.owner}/${client.repo}`;
-      onNotify("Drop created successfully.");
+      const details = `Share created.\nShare link: ${shareUrl}\nTag: ${dropTag}\nRepository: ${client.owner}/${client.repo}`;
+      onNotify("Share created successfully.");
       window.navigator.clipboard.writeText(details).catch(() => {});
       progress.textContent = "";
-      dropPassword.value = "";
-      dropFiles.value = "";
+      sharePassword.value = "";
+      sharePasswordConfirm.value = "";
+      shareFilesInput.value = "";
+      selectedFiles = [];
+      selectedSummary.textContent = "No files selected";
       await listDrops(root, client);
     } catch (error) {
       progress.textContent = "";
-      onNotify(error.message || "Failed to create drop.");
+      renderPasswordError(error.message || "Failed to create Share.");
     }
   });
 
@@ -269,24 +426,24 @@ export async function listDrops(root, providedClient = null) {
   const repo = root.querySelector("#githubRepo")?.value.trim() || DEFAULT_GITHUB_CONFIG.repo;
   const token = root.querySelector("#githubToken")?.value.trim() || "";
   const client = providedClient || new GitHubClient({ owner, repo, token });
-  list.innerHTML = "<p class='muted small'>Loading drops…</p>";
+  list.innerHTML = "<p class='muted small'>Loading Shares…</p>";
 
   try {
     const releases = await client.listReleases(50);
-    const drops = releases
+    const shares = releases
       .filter((release) => release.tag_name && release.tag_name.startsWith(DROP_ID_PREFIX))
       .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-    if (!drops.length) {
-      list.innerHTML = "<p class='muted small'>No drops found yet.</p>";
+    if (!shares.length) {
+      list.innerHTML = "<p class='muted small'>No Shares yet.</p>";
       return;
     }
-    list.innerHTML = drops
-      .map((release) => renderDropCard(client, release))
+    list.innerHTML = shares
+      .map((release) => renderShareCard(client, release))
       .join("");
-    list.querySelectorAll("button[data-action='delete-drop']").forEach((btn) => {
+    list.querySelectorAll("button[data-action='delete-share']").forEach((btn) => {
       btn.addEventListener("click", async () => {
         const id = btn.dataset.releaseId;
-        if (!window.confirm("Delete this Drop permanently?\nThe files will no longer be available through this share.")) {
+        if (!window.confirm("Delete this Share permanently?\nThe files will no longer be available through this share.")) {
           return;
         }
         try {
@@ -299,41 +456,49 @@ export async function listDrops(root, providedClient = null) {
     });
     list.querySelectorAll("button[data-action='copy-share']").forEach((btn) => {
       btn.addEventListener("click", async () => {
-        const shareUrl = btn.dataset.shareUrl;
-        await window.navigator.clipboard.writeText(shareUrl);
-        alert("Link copied");
+        await window.navigator.clipboard.writeText(btn.dataset.shareUrl);
+        renderTemporaryAlert(root, "Link copied");
       });
     });
-    list.querySelectorAll("button[data-action='open-drop']").forEach((btn) => {
+    list.querySelectorAll("button[data-action='open-share']").forEach((btn) => {
       btn.addEventListener("click", () => {
-        const shareUrl = btn.dataset.url;
-        window.open(shareUrl, "_blank", "noopener");
+        window.open(btn.dataset.url, "_blank", "noopener");
       });
     });
   } catch (error) {
-    list.innerHTML = `<p class="status status-bad">Unable to list drops: ${error.message}</p>`;
+    list.innerHTML = `<p class="status status-bad">Unable to list Shares: ${error.message}</p>`;
   }
 }
 
-function renderDropCard(client, release) {
+function renderShareCard(client, release) {
   const id = release.tag_name.replace(DROP_ID_PREFIX, "");
   const age = formatDropAge(release.created_at);
   const shareUrl = shareUrlForId(id);
-  const location = `https://github.com/${client.owner}/${client.repo}/releases/tag/${encodeURIComponent(release.tag_name)}`;
   return `
-    <div class="drop-item">
-      <div><strong>${release.name || "Drop"}</strong><span class="tag">#${id}</span></div>
+    <article class="drop-item">
+      <div><strong>${release.name || "Share"}</strong><span class="tag">#${id}</span></div>
       <div class="meta small">
         <span class="status status-ok">active</span>
         <span>Created: ${age}</span>
-        <span>Storage: <a href="${location}" target="_blank" rel="noreferrer">GitHub release</a></span>
       </div>
-      <div class="small">${release.body || ""}</div>
+      <div class="small">GitHub release created for this Share.</div>
       <div class="row-actions">
         <button class="btn-plain btn-inline" data-action="copy-share" data-share-url="${shareUrl}">Copy Share Link</button>
-        <button class="btn-ghost btn-inline" data-action="open-drop" data-url="${shareUrl}">Open Drop</button>
-        <button class="btn-danger btn-inline" data-action="delete-drop" data-release-id="${release.id}">Delete</button>
+        <button class="btn-ghost btn-inline" data-action="open-share" data-url="${shareUrl}">Open Share</button>
+        <button class="btn-danger btn-inline" data-action="delete-share" data-release-id="${release.id}">Delete Share</button>
       </div>
-    </div>
+    </article>
   `;
+}
+
+function renderTemporaryAlert(root, message) {
+  const statusArea = root.querySelector("#ownerStatus");
+  if (!statusArea) return;
+  statusArea.textContent = message;
+  statusArea.className = "status status-ok small";
+  window.setTimeout(() => {
+    if (statusArea.textContent === message) {
+      statusArea.textContent = "";
+    }
+  }, 1800);
 }

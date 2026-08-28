@@ -12,9 +12,8 @@ export default async function run() {
   assert.equal(queryId, "def456");
 
   const share = shareUrlForId("abc123");
-  assert.ok(share.includes("/drop/abc123"));
+  assert.ok(share.includes("/share/abc123"));
 
   globalThis.window = originalWindow;
   console.log("url.test passed");
 }
-
