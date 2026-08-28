@@ -1,24 +1,67 @@
-import { DEFAULT_GITHUB_CONFIG, DROP_ID_PREFIX, MAX_SINGLE_FILE_BYTES, MAX_TOTAL_BYTES, OWNER_STORAGE_KEY } from "../lib/config.js";
+import {
+  DEFAULT_GITHUB_CONFIG,
+  DROP_ID_PREFIX,
+  APP_SINGLE_FILE_BYTES,
+  APP_TOTAL_BYTES,
+  OWNER_STORAGE_KEY,
+  TOKEN_SESSION_KEY,
+  TOKEN_REMEMBER_KEY,
+} from "../lib/config.js";
 import { GitHubClient } from "../services/github.js";
-import { createDropEnvelope, formatDropAge, totalsFromFiles } from "../lib/dropModel.js";
+import { createDropEnvelope, formatDropAge } from "../lib/dropModel.js";
 import { randomId, deriveKey, encryptBuffer, readFileAsArrayBuffer, encryptTextObject, toBase64, fromBase64, humanBytes } from "../utils/crypto.js";
-import { shareUrlForId, getDropIdFromLocation } from "../utils/routing.js";
+import { shareUrlForId } from "../utils/routing.js";
+
+const PERSISTENT_TOKEN_KEY = "mbfs_owner_token_persistent_v1";
 
 function ownerSettings() {
   const raw = localStorage.getItem(OWNER_STORAGE_KEY);
   if (!raw) {
-    return { ...DEFAULT_GITHUB_CONFIG, token: "" };
+    return { ...DEFAULT_GITHUB_CONFIG };
   }
   try {
     const parsed = JSON.parse(raw);
     return {
       owner: parsed.owner || DEFAULT_GITHUB_CONFIG.owner,
       repo: parsed.repo || DEFAULT_GITHUB_CONFIG.repo,
-      token: parsed.token || "",
     };
   } catch {
-    return { ...DEFAULT_GITHUB_CONFIG, token: "" };
+    return { ...DEFAULT_GITHUB_CONFIG };
   }
+}
+
+function getSavedToken(rememberToken) {
+  if (rememberToken) {
+    return localStorage.getItem(PERSISTENT_TOKEN_KEY) || "";
+  }
+  return sessionStorage.getItem(TOKEN_SESSION_KEY) || "";
+}
+
+function setSavedToken(token, rememberToken) {
+  if (rememberToken) {
+    if (token) {
+      localStorage.setItem(PERSISTENT_TOKEN_KEY, token);
+      localStorage.setItem(TOKEN_REMEMBER_KEY, "1");
+    } else {
+      localStorage.removeItem(PERSISTENT_TOKEN_KEY);
+      localStorage.removeItem(TOKEN_REMEMBER_KEY);
+    }
+    sessionStorage.removeItem(TOKEN_SESSION_KEY);
+  } else {
+    if (token) {
+      sessionStorage.setItem(TOKEN_SESSION_KEY, token);
+    } else {
+      sessionStorage.removeItem(TOKEN_SESSION_KEY);
+    }
+    localStorage.removeItem(PERSISTENT_TOKEN_KEY);
+    localStorage.removeItem(TOKEN_REMEMBER_KEY);
+  }
+}
+
+function clearSavedToken() {
+  localStorage.removeItem(PERSISTENT_TOKEN_KEY);
+  localStorage.removeItem(TOKEN_REMEMBER_KEY);
+  sessionStorage.removeItem(TOKEN_SESSION_KEY);
 }
 
 export function renderOwnerView(root, { setMode, onNotify }) {
@@ -31,7 +74,12 @@ export function renderOwnerView(root, { setMode, onNotify }) {
         <div class="field-grid">
           <div class="field"><label for="githubOwner">GitHub owner</label><input id="githubOwner" type="text" value="${DEFAULT_GITHUB_CONFIG.owner}" /></div>
           <div class="field"><label for="githubRepo">GitHub repository</label><input id="githubRepo" type="text" value="${DEFAULT_GITHUB_CONFIG.repo}" /></div>
-          <div class="field"><label for="githubToken">GitHub token (owner only)</label><input id="githubToken" type="password" autocomplete="off" placeholder="Store token locally only" /></div>
+          <div class="field"><label for="githubToken">GitHub token (owner only)</label><input id="githubToken" type="password" autocomplete="off" placeholder="Session-only by default" /></div>
+          <div class="field">
+            <label><input id="rememberToken" type="checkbox" /> Remember token on this device</label>
+            <div class="small muted">Optional: stores token in local browser storage on this computer.</div>
+          </div>
+          <div class="field"><button id="forgetToken" class="btn-plain btn-inline">Forget GitHub credentials</button></div>
         </div>
         <div class="button-row">
           <button id="saveConfig" class="btn-primary">Save config</button>
@@ -41,7 +89,7 @@ export function renderOwnerView(root, { setMode, onNotify }) {
 
       <section class="grid">
         <h3>Create new Drop</h3>
-        <div class="inline-note">Temporary file exchange</div>
+        <p id="storageLimitNotice" class="inline-note small"></p>
         <div class="field-grid">
           <div class="field"><label for="dropName">Drop name</label><input id="dropName" type="text" value="Family Photos" /></div>
           <div class="field"><label for="dropPassword">Password</label><input id="dropPassword" type="password" autocomplete="new-password" /></div>
@@ -65,6 +113,8 @@ export function renderOwnerView(root, { setMode, onNotify }) {
   const githubOwner = root.querySelector("#githubOwner");
   const githubRepo = root.querySelector("#githubRepo");
   const githubToken = root.querySelector("#githubToken");
+  const rememberToken = root.querySelector("#rememberToken");
+  const forgetToken = root.querySelector("#forgetToken");
   const saveConfig = root.querySelector("#saveConfig");
   const refreshDrops = root.querySelector("#refreshDrops");
   const createDrop = root.querySelector("#createDrop");
@@ -73,11 +123,15 @@ export function renderOwnerView(root, { setMode, onNotify }) {
   const dropPassword = root.querySelector("#dropPassword");
   const dropFiles = root.querySelector("#dropFiles");
   const progress = root.querySelector("#createProgress");
+  const storageLimitNotice = root.querySelector("#storageLimitNotice");
 
   const settings = ownerSettings();
   githubOwner.value = settings.owner;
   githubRepo.value = settings.repo;
-  githubToken.value = settings.token;
+  const isRemembered = localStorage.getItem(TOKEN_REMEMBER_KEY) === "1";
+  rememberToken.checked = isRemembered;
+  githubToken.value = getSavedToken(isRemembered);
+  storageLimitNotice.textContent = `Limits (app): file ≤ ${humanBytes(APP_SINGLE_FILE_BYTES)}, drop ≤ ${humanBytes(APP_TOTAL_BYTES)}. GitHub releases can support much larger payloads; these limits are conservative to keep mobile browsers stable.`;
 
   const getClient = () => new GitHubClient({
     owner: githubOwner.value.trim(),
@@ -89,10 +143,25 @@ export function renderOwnerView(root, { setMode, onNotify }) {
     const payload = {
       owner: githubOwner.value.trim(),
       repo: githubRepo.value.trim(),
-      token: githubToken.value.trim(),
     };
     localStorage.setItem(OWNER_STORAGE_KEY, JSON.stringify(payload));
+    setSavedToken(githubToken.value.trim(), rememberToken.checked);
     onNotify("Owner GitHub settings saved.");
+  });
+
+  forgetToken.addEventListener("click", () => {
+    clearSavedToken();
+    githubToken.value = "";
+    rememberToken.checked = false;
+    onNotify("GitHub credentials have been cleared.");
+  });
+
+  rememberToken.addEventListener("change", () => {
+    setSavedToken(githubToken.value.trim(), rememberToken.checked);
+  });
+
+  githubToken.addEventListener("input", () => {
+    setSavedToken(githubToken.value.trim(), rememberToken.checked);
   });
 
   clearDropForm.addEventListener("click", () => {
@@ -116,18 +185,18 @@ export function renderOwnerView(root, { setMode, onNotify }) {
         onNotify("Password is required.");
         return;
       }
-      const tokenMissing = !githubToken.value.trim();
-      if (tokenMissing) {
+      if (!githubToken.value.trim()) {
         onNotify("Owner token is required to create a new Drop.");
         return;
       }
+
       const total = selected.reduce((acc, file) => acc + file.size, 0);
-      if (selected.some((f) => f.size > MAX_SINGLE_FILE_BYTES)) {
-        onNotify(`Each file must be under ${humanBytes(MAX_SINGLE_FILE_BYTES)} for this app version.`);
+      if (selected.some((f) => f.size > APP_SINGLE_FILE_BYTES)) {
+        onNotify(`Each file must be under ${humanBytes(APP_SINGLE_FILE_BYTES)} for this app version.`);
         return;
       }
-      if (total > MAX_TOTAL_BYTES) {
-        onNotify(`Total upload would exceed ${humanBytes(MAX_TOTAL_BYTES)}.`);
+      if (total > APP_TOTAL_BYTES) {
+        onNotify(`Total upload would exceed ${humanBytes(APP_TOTAL_BYTES)}.`);
         return;
       }
 
@@ -139,6 +208,7 @@ export function renderOwnerView(root, { setMode, onNotify }) {
       const saltB64 = toBase64(salt);
       const key = await deriveKey(dropPassword.value, saltB64);
       const fileInfos = [];
+
       progress.textContent = "Encrypting files...";
       for (const file of selected) {
         const arrayBuffer = await readFileAsArrayBuffer(file);
@@ -176,10 +246,7 @@ export function renderOwnerView(root, { setMode, onNotify }) {
       }
 
       const shareUrl = shareUrlForId(dropId);
-      const details = `Drop created.
-Share link: ${shareUrl}
-Tag: ${dropTag}
-Repository location: ${client.owner}/${client.repo}`;
+      const details = `Drop created.\nShare link: ${shareUrl}\nTag: ${dropTag}\nRepository: ${client.owner}/${client.repo}`;
       onNotify("Drop created successfully.");
       window.navigator.clipboard.writeText(details).catch(() => {});
       progress.textContent = "";
@@ -187,7 +254,6 @@ Repository location: ${client.owner}/${client.repo}`;
       dropFiles.value = "";
       await listDrops(root, client);
     } catch (error) {
-      console.error(error);
       progress.textContent = "";
       onNotify(error.message || "Failed to create drop.");
     }
@@ -226,10 +292,7 @@ export async function listDrops(root, providedClient = null) {
         try {
           await client.deleteRelease(id);
           await listDrops(root, client);
-          const ownerView = root.querySelector("#owner-view");
-          ownerView?.dispatchEvent(new CustomEvent("notify", { detail: "Drop deleted." }));
         } catch (error) {
-          list.classList.add("status-bad");
           alert(error.message);
         }
       });
@@ -239,6 +302,12 @@ export async function listDrops(root, providedClient = null) {
         const shareUrl = btn.dataset.shareUrl;
         await window.navigator.clipboard.writeText(shareUrl);
         alert("Link copied");
+      });
+    });
+    list.querySelectorAll("button[data-action='open-drop']").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const shareUrl = btn.dataset.url;
+        window.open(shareUrl, "_blank", "noopener");
       });
     });
   } catch (error) {
@@ -262,7 +331,7 @@ function renderDropCard(client, release) {
       <div class="small">${release.body || ""}</div>
       <div class="row-actions">
         <button class="btn-plain btn-inline" data-action="copy-share" data-share-url="${shareUrl}">Copy Share Link</button>
-        <button class="btn-ghost btn-inline" data-action="open-drop" data-url="${shareUrl}" data-release-url="${location}">Open Drop</button>
+        <button class="btn-ghost btn-inline" data-action="open-drop" data-url="${shareUrl}">Open Drop</button>
         <button class="btn-danger btn-inline" data-action="delete-drop" data-release-id="${release.id}">Delete</button>
       </div>
     </div>
