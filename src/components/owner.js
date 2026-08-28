@@ -7,7 +7,7 @@ import {
   TOKEN_SESSION_KEY,
   TOKEN_REMEMBER_KEY,
 } from "../lib/config.js";
-import { GitHubClient } from "../services/github.js";
+import { GitHubApiError, GitHubClient } from "../services/github.js";
 import { createDropEnvelope, formatDropAge } from "../lib/dropModel.js";
 import {
   randomId,
@@ -26,17 +26,48 @@ const PERSISTENT_TOKEN_KEY = "mbfs_owner_token_persistent_v1";
 function ownerSettings() {
   const raw = localStorage.getItem(OWNER_STORAGE_KEY);
   if (!raw) {
-    return { ...DEFAULT_GITHUB_CONFIG };
+    return { owner: sanitizeRepoField(DEFAULT_GITHUB_CONFIG.owner), repo: sanitizeRepoField(DEFAULT_GITHUB_CONFIG.repo) };
   }
   try {
     const parsed = JSON.parse(raw);
     return {
-      owner: parsed.owner || DEFAULT_GITHUB_CONFIG.owner,
-      repo: parsed.repo || DEFAULT_GITHUB_CONFIG.repo,
+      owner: sanitizeRepoField(parsed.owner || DEFAULT_GITHUB_CONFIG.owner),
+      repo: sanitizeRepoField(parsed.repo || DEFAULT_GITHUB_CONFIG.repo),
     };
   } catch {
-    return { ...DEFAULT_GITHUB_CONFIG };
+    return { owner: sanitizeRepoField(DEFAULT_GITHUB_CONFIG.owner), repo: sanitizeRepoField(DEFAULT_GITHUB_CONFIG.repo) };
   }
+}
+
+function sanitizeRepoField(value) {
+  return (value || "").trim();
+}
+
+function expectedRepository() {
+  return {
+    owner: sanitizeRepoField(DEFAULT_GITHUB_CONFIG.owner),
+    repo: sanitizeRepoField(DEFAULT_GITHUB_CONFIG.repo),
+  };
+}
+
+function formatGitHubError(error) {
+  if (!(error instanceof GitHubApiError)) {
+    return error?.message || "GitHub request failed.";
+  }
+  const docs = error.documentationUrl ? ` Docs: ${error.documentationUrl}` : "";
+  const acceptedScopes = error.headers?.acceptedOauthScopes ? ` Accepted scopes: ${error.headers.acceptedOauthScopes}` : "";
+  const grantedScopes = error.headers?.oauthScopes ? ` Granted scopes: ${error.headers.oauthScopes}` : "";
+  return `GitHub could not ${error.operation} (HTTP ${error.status}). Repository: ${DEFAULT_GITHUB_CONFIG.owner}/${DEFAULT_GITHUB_CONFIG.repo}. Endpoint: ${error.endpoint}. ${error.message || "No response message."}.${docs}${acceptedScopes}${grantedScopes}`;
+}
+
+function setOwnerRepoValidation(owner, repo) {
+  const expected = expectedRepository();
+  const target = `${expected.owner}/${expected.repo}`;
+  const configured = `${owner}/${repo}`;
+  if (configured !== target) {
+    throw new Error(`Repository is ${configured}. This app sends links from ${target}.`);
+  }
+  return { owner: expected.owner, repo: expected.repo };
 }
 
 function getSavedToken(rememberToken) {
@@ -236,11 +267,21 @@ export function renderOwnerView(root, { onNotify }) {
     }
   }
 
-  const getClient = () => new GitHubClient({
-    owner: githubOwner.value.trim(),
-    repo: githubRepo.value.trim(),
-    token: githubToken.value.trim(),
-  });
+  let validatedClient = null;
+  const getClient = () =>
+    new GitHubClient({
+      owner: sanitizeRepoField(githubOwner.value),
+      repo: sanitizeRepoField(githubRepo.value),
+      token: githubToken.value.trim(),
+    });
+  const resolveOwnerRepo = () =>
+    setOwnerRepoValidation(sanitizeRepoField(githubOwner.value), sanitizeRepoField(githubRepo.value));
+  const verifyConnection = async () => {
+    const { owner, repo } = resolveOwnerRepo();
+    const client = new GitHubClient({ owner, repo, token: githubToken.value.trim() });
+    await client.getRepo(owner, repo);
+    return client;
+  };
 
   shareDropZone.addEventListener("click", () => shareFilesInput.click());
   shareDropZone.addEventListener("keydown", (event) => {
@@ -266,14 +307,21 @@ export function renderOwnerView(root, { onNotify }) {
     shareFilesInput.files = dt.files;
   });
 
-  saveConfig.addEventListener("click", () => {
-    const payload = {
-      owner: githubOwner.value.trim(),
-      repo: githubRepo.value.trim(),
-    };
-    localStorage.setItem(OWNER_STORAGE_KEY, JSON.stringify(payload));
-    setSavedToken(githubToken.value.trim(), rememberToken.checked);
-    onNotify("Owner GitHub settings saved.");
+  saveConfig.addEventListener("click", async () => {
+    try {
+      const payload = {
+        owner: sanitizeRepoField(githubOwner.value),
+        repo: sanitizeRepoField(githubRepo.value),
+      };
+      resolveOwnerRepo();
+      const client = await verifyConnection();
+      localStorage.setItem(OWNER_STORAGE_KEY, JSON.stringify(payload));
+      setSavedToken(githubToken.value.trim(), rememberToken.checked);
+      onNotify(`GitHub connection ready.`);
+      validatedClient = client;
+    } catch (error) {
+      renderPasswordError(formatGitHubError(error));
+    }
   });
 
   forgetToken.addEventListener("click", () => {
@@ -357,6 +405,9 @@ export function renderOwnerView(root, { onNotify }) {
         return;
       }
 
+      if (!validatedClient) {
+        validatedClient = await verifyConnection();
+      }
       const client = getClient();
       const dropId = randomId();
       const dropTag = `${DROP_ID_PREFIX}${dropId}`;
@@ -415,7 +466,7 @@ export function renderOwnerView(root, { onNotify }) {
       await listDrops(root, client);
     } catch (error) {
       progress.textContent = "";
-      renderPasswordError(error.message || "Failed to create link.");
+      renderPasswordError(formatGitHubError(error) || "Failed to create link.");
     }
   });
 
@@ -425,9 +476,17 @@ export function renderOwnerView(root, { onNotify }) {
 export async function listDrops(root, providedClient = null) {
   const list = root.querySelector("#dropsList");
   if (!list) return;
-  const owner = root.querySelector("#githubOwner")?.value.trim() || DEFAULT_GITHUB_CONFIG.owner;
-  const repo = root.querySelector("#githubRepo")?.value.trim() || DEFAULT_GITHUB_CONFIG.repo;
+  const ownerValue = sanitizeRepoField(root.querySelector("#githubOwner")?.value || "");
+  const repoValue = sanitizeRepoField(root.querySelector("#githubRepo")?.value || "");
   const token = root.querySelector("#githubToken")?.value.trim() || "";
+  let owner;
+  let repo;
+  try {
+    ({ owner, repo } = setOwnerRepoValidation(ownerValue, repoValue));
+  } catch (error) {
+    list.innerHTML = `<p class="status status-bad">Unable to load online files: ${error.message || error}</p>`;
+    return;
+  }
   const client = providedClient || new GitHubClient({ owner, repo, token });
   list.innerHTML = "<p class='muted small'>Loading your file groups…</p>";
 
@@ -453,7 +512,7 @@ export async function listDrops(root, providedClient = null) {
           await client.deleteRelease(id);
           await listDrops(root, client);
         } catch (error) {
-          alert(error.message);
+          alert(formatGitHubError(error));
         }
       });
     });
@@ -469,7 +528,7 @@ export async function listDrops(root, providedClient = null) {
       });
     });
   } catch (error) {
-    list.innerHTML = `<p class="status status-bad">Unable to load online files: ${error.message}</p>`;
+    list.innerHTML = `<p class="status status-bad">Unable to load online files: ${formatGitHubError(error)}</p>`;
   }
 }
 
