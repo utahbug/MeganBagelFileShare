@@ -13,16 +13,16 @@ export async function renderRecipientView(root, { onNotify }) {
 
   const tagName = `mbs-drop-${dropId}`;
   root.innerHTML = `
-    <h2 class="section-title">Open Share</h2>
-    <p class="inline-note">Enter the Share password to unlock files.</p>
+    <h2 class="section-title">Files Sent to You</h2>
+    <p class="inline-note">These files are intended for temporary transfer.<br />Enter the password provided by the sender.</p>
     <div class="grid" id="recipientGate">
-      <label for="dropPassword">Share password</label>
+      <label for="dropPassword">Password</label>
       <div class="inline-input-row">
         <input id="dropPassword" type="password" autocomplete="new-password" />
         <button id="toggleRecipientPassword" class="btn-plain btn-inline" type="button">Show</button>
       </div>
       <div class="button-row">
-        <button id="unlockDrop" class="btn-primary">Unlock share</button>
+        <button id="unlockDrop" class="btn-primary">Open Files</button>
       </div>
       <p class="small" id="recipientStatus" aria-live="polite"></p>
     </div>
@@ -30,7 +30,7 @@ export async function renderRecipientView(root, { onNotify }) {
       <div id="dropHeader"></div>
       <div id="manifestArea" class="files"></div>
       <div class="button-row">
-        <button id="downloadAll" class="btn-secondary">Download all</button>
+        <button id="downloadAll" class="btn-secondary">Save All Files</button>
       </div>
     </div>
   `;
@@ -57,19 +57,19 @@ export async function renderRecipientView(root, { onNotify }) {
   unlockDrop.addEventListener("click", async () => {
     const password = passwordInput.value;
     if (!password) {
-      recipientStatus.textContent = "Enter the share password first.";
+      recipientStatus.textContent = "Enter the recipient password first.";
       return;
     }
-    recipientStatus.textContent = "Unlocking share…";
+    recipientStatus.textContent = "Opening files…";
     manifest = null;
     try {
       const release = await client.getReleaseByTag(tagName);
       if (!release?.assets?.length) {
-        throw new Error("Share not found or expired.");
+        throw new Error("This file link is not available.");
       }
       const manifestAsset = release.assets.find((asset) => asset.name.startsWith("manifest-") && asset.name.endsWith(".enc"));
       if (!manifestAsset) {
-        throw new Error("Share manifest missing.");
+        throw new Error("File package details are missing.");
       }
 
       const manifestPayload = await fetch(manifestAsset.browser_download_url).then((response) => {
@@ -81,7 +81,7 @@ export async function renderRecipientView(root, { onNotify }) {
       const manifestKey = await deriveKey(password, manifestPayload.salt);
       const decrypted = await decryptTextObject(manifestPayload, manifestKey);
       if (!decrypted?.files?.length || !decrypted.salt) {
-        throw new Error("Share manifest has no files.");
+        throw new Error("No files were found in this package.");
       }
       manifest = decrypted;
 
@@ -89,7 +89,7 @@ export async function renderRecipientView(root, { onNotify }) {
       const age = formatDropAge(manifest.createdAt);
       dropHeader.innerHTML = `
         <p><strong>${manifest.name}</strong></p>
-        <p class="small">Temporary storage — delete after successful transfer.</p>
+        <p class="small">These files are intended for temporary transfer.</p>
         <p class="small">${manifest.files.length} files · ${humanBytes(totalBytes)} · ${age}</p>
       `;
       manifestArea.innerHTML = manifest.files
@@ -99,8 +99,8 @@ export async function renderRecipientView(root, { onNotify }) {
             <p class="file-name">${escapeHtml(file.originalName || "Unnamed file")}</p>
             <p class="small">${humanBytes(file.size || 0)} · ${file.mimeType || "application/octet-stream"}</p>
             <div class="row-actions">
-              <button class="btn-primary btn-inline" data-action="download-file" data-file="${file.id}">Download</button>
-              ${isImage ? `<button class="btn-ghost btn-inline" data-action="copy-file" data-file="${file.id}">Copy image</button>` : ""}
+              <button class="btn-primary btn-inline" data-action="download-file" data-file="${file.id}">Save This File</button>
+              ${isImage ? `<button class="btn-ghost btn-inline" data-action="copy-file" data-file="${file.id}">Copy Image</button>` : ""}
             </div>
           </article>`;
         })
@@ -110,10 +110,10 @@ export async function renderRecipientView(root, { onNotify }) {
         ...file,
         asset: release.assets.find((asset) => asset.name === file.assetName),
       })).filter((entry) => entry.asset);
-      recipientStatus.textContent = "Share unlocked.";
+      recipientStatus.textContent = "Files unlocked.";
       contentArea.classList.remove("hidden");
     } catch (error) {
-      recipientStatus.textContent = `Unable to unlock share: ${error.message}`;
+      recipientStatus.textContent = `Unable to open files: ${error.message}`;
     }
   });
 
@@ -158,7 +158,7 @@ export async function renderRecipientView(root, { onNotify }) {
       btn?.click();
       await new Promise((resolve) => setTimeout(resolve, 120));
     }
-    onNotify?.("Downloads started.");
+    onNotify?.("Saving all files.");
   });
 }
 

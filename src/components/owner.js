@@ -83,8 +83,8 @@ function formatSelectedFilesLabel(selected) {
 
 export function renderOwnerView(root, { onNotify }) {
   root.innerHTML = `
-    <h2 class="section-title">Owner Dashboard</h2>
-    <p class="muted small">Temporary file exchange · owner controls</p>
+    <h2 class="section-title">Send Files to Someone</h2>
+    <p class="muted small">Add files, create a password, and send the link to the person receiving them.</p>
 
     <section class="section-card">
       <h3>Connection</h3>
@@ -103,31 +103,35 @@ export function renderOwnerView(root, { onNotify }) {
             <input id="githubToken" type="password" autocomplete="off" placeholder="Session-only by default" />
             <button id="toggleOwnerToken" class="btn-plain btn-inline" type="button">Show</button>
           </div>
-          <p class="small muted">Owner token is required for creating and deleting Shares.</p>
+          <p class="small muted">This token is used when creating links and deleting online files.</p>
         </div>
         <div class="field">
           <label><input id="rememberToken" type="checkbox" /> Remember token on this device</label>
-          <p class="small muted">Optional: keeps your token on this browser only.</p>
+          <p class="small muted">Optional: keeps the token in this browser only.</p>
         </div>
-        <div class="field"><button id="forgetToken" class="btn-plain btn-inline">Forget GitHub credentials</button></div>
+        <div class="field"><button id="forgetToken" class="btn-plain btn-inline">Forget token settings</button></div>
         <div class="field">
           <div class="button-row">
-            <button id="saveConfig" class="btn-primary">Save connection</button>
+            <button id="saveConfig" class="btn-primary">Save settings</button>
           </div>
         </div>
       </div>
     </section>
 
     <section class="section-card">
-      <h3>Create a Share</h3>
-      <p id="storageLimitNotice" class="small muted">Limits: ${humanBytes(APP_SINGLE_FILE_BYTES)} per file and ${humanBytes(APP_TOTAL_BYTES)} per Share.</p>
+      <h3>Send Files</h3>
+      <p id="storageLimitNotice" class="small muted">Up to ${humanBytes(APP_SINGLE_FILE_BYTES)} per file and ${humanBytes(APP_TOTAL_BYTES)} total.</p>
+      <details class="small">
+        <summary>About file limits</summary>
+        <p class="muted">Files are grouped and sent as a single temporary online transfer.</p>
+      </details>
       <div class="field-grid">
         <div class="field">
-          <label for="shareName">Share name</label>
+          <label for="shareName">Name this file group</label>
           <input id="shareName" type="text" value="Family Photos" />
         </div>
         <div class="field">
-          <label for="sharePassword">Password</label>
+          <label for="sharePassword">Create a password</label>
           <div class="inline-input-row">
             <input id="sharePassword" type="password" autocomplete="new-password" />
             <button id="toggleSharePassword" class="btn-plain btn-inline" type="button">Show</button>
@@ -139,30 +143,29 @@ export function renderOwnerView(root, { onNotify }) {
             <input id="sharePasswordConfirm" type="password" autocomplete="new-password" />
             <button id="toggleSharePasswordConfirm" class="btn-plain btn-inline" type="button">Show</button>
           </div>
-          <p id="passwordHelper" class="small muted" role="status" aria-live="polite">Recipients will need this password to open the Share.</p>
+          <p id="passwordHelper" class="small muted" role="status" aria-live="polite">Give this password to the person receiving the files.</p>
         </div>
         <div class="field">
-          <label for="shareFilesInput">Files</label>
-          <div id="shareDropZone" class="drop-zone" role="button" tabindex="0" aria-label="Upload files">
-            <p class="drop-zone-title">Drop files here</p>
-            <p class="small muted">or choose files</p>
+          <label for="shareFilesInput">Add files</label>
+          <div id="shareDropZone" class="drop-zone" role="button" tabindex="0" aria-label="Add files">
+            <p class="drop-zone-title">Drop files here or choose files</p>
             <p class="small muted" id="selectedFileSummary">No files selected</p>
           </div>
           <input id="shareFilesInput" type="file" multiple class="hidden-file-input" />
         </div>
       </div>
 
-      <div class="inline-note small">Files are encrypted in your browser before upload. Your password is not stored with the files.</div>
+      <div class="inline-note small">Files are encrypted in your browser before they are sent.<br />Your password is not stored with the files.</div>
       <p id="ownerStatus" class="status status-warning small" role="alert" aria-live="polite"></p>
       <div class="progress" id="createProgress" aria-live="polite"></div>
       <div class="button-row">
-        <button id="createShare" class="btn-primary">Create Share</button>
+        <button id="createShare" class="btn-primary">Create Link</button>
         <button id="clearShareForm" class="btn-plain">Clear</button>
       </div>
     </section>
 
     <section class="section-card">
-      <h3>Your Shares</h3>
+      <h3>Files You Are Sharing</h3>
       <div id="dropsList" class="drop-list"></div>
     </section>
   `;
@@ -215,18 +218,18 @@ export function renderOwnerView(root, { onNotify }) {
     const pass = sharePassword.value.trim();
     const confirm = sharePasswordConfirm.value.trim();
     if (!pass || !confirm) {
-      passwordHelper.textContent = "Recipients will need this password to open the Share.";
+      passwordHelper.textContent = "Give this password to the person receiving the files.";
       return;
     }
     if (pass !== confirm) {
-      passwordHelper.textContent = "Passwords do not match. Please make them the same.";
+      passwordHelper.textContent = "The passwords do not match.";
       status.textContent = "Passwords do not match.";
       status.className = "status status-bad small";
       return;
     }
-    passwordHelper.textContent = "Recipients will need this password to open the Share.";
+    passwordHelper.textContent = "Give this password to the person receiving the files.";
     if (pass.length >= 6) {
-      passwordHelper.textContent = "Looks good. Recipients will need this password to open the Share.";
+      passwordHelper.textContent = "Give this password to the person receiving the files.";
     }
     if (status && status.textContent === "Passwords do not match.") {
       status.textContent = "";
@@ -329,19 +332,19 @@ export function renderOwnerView(root, { onNotify }) {
   createShare.addEventListener("click", async () => {
     try {
       if (!selectedFiles.length) {
-        renderPasswordError("Select at least one file first.");
+        renderPasswordError("Add at least one file.");
         return;
       }
       if (!sharePassword.value.trim()) {
-        renderPasswordError("Password is required.");
+        renderPasswordError("Enter a password.");
         return;
       }
       if (sharePassword.value !== sharePasswordConfirm.value) {
-        renderPasswordError("Passwords do not match.");
+        renderPasswordError("The passwords do not match.");
         return;
       }
       if (!githubToken.value.trim()) {
-        renderPasswordError("Owner token is required to create a new Share.");
+        renderPasswordError("A token is required to create the link.");
         return;
       }
       const total = selectedFiles.reduce((acc, file) => acc + file.size, 0);
@@ -350,7 +353,7 @@ export function renderOwnerView(root, { onNotify }) {
         return;
       }
       if (total > APP_TOTAL_BYTES) {
-        renderPasswordError(`Total upload would exceed ${humanBytes(APP_TOTAL_BYTES)}.`);
+        renderPasswordError(`Total send size would exceed ${humanBytes(APP_TOTAL_BYTES)}.`);
         return;
       }
 
@@ -363,7 +366,7 @@ export function renderOwnerView(root, { onNotify }) {
       const key = await deriveKey(sharePassword.value, saltB64);
       const fileInfos = [];
 
-      progress.textContent = "Encrypting files...";
+      progress.textContent = "Preparing files...";
       for (const file of selectedFiles) {
         const arrayBuffer = await readFileAsArrayBuffer(file);
         const encrypted = await encryptBuffer(arrayBuffer, key);
@@ -381,7 +384,7 @@ export function renderOwnerView(root, { onNotify }) {
         fileInfos.push({ ...info, blob: encryptedFile });
       }
 
-      const manifest = createDropEnvelope(shareName.value.trim() || "Untitled Share", saltB64, fileInfos.map((file) => {
+      const manifest = createDropEnvelope(shareName.value.trim() || "Untitled file group", saltB64, fileInfos.map((file) => {
         const { blob, ...safeInfo } = file;
         return safeInfo;
       }));
@@ -389,19 +392,19 @@ export function renderOwnerView(root, { onNotify }) {
       const manifestBlob = new Blob([JSON.stringify(encryptedManifest)], { type: "application/json" });
       const releaseName = `${Math.trunc(Date.now() / 1000)}-${shareName.value.trim() || "share"}`;
 
-      progress.textContent = "Creating Share...";
-      const release = await client.createRelease(dropTag, releaseName, "Temporary encrypted Share.");
+      progress.textContent = "Creating link...";
+      const release = await client.createRelease(dropTag, releaseName, "Temporary encrypted file group.");
       const uploadUrl = release.upload_url;
 
-      progress.textContent = "Uploading manifest and files...";
+      progress.textContent = "Sending files...";
       await client.uploadAsset(uploadUrl, `manifest-${dropId}.enc`, manifestBlob, "application/octet-stream");
       for (const file of fileInfos) {
         await client.uploadAsset(uploadUrl, file.assetName, file.blob, "application/octet-stream");
       }
 
       const shareUrl = shareUrlForId(dropId);
-      const details = `Share created.\nShare link: ${shareUrl}\nTag: ${dropTag}\nRepository: ${client.owner}/${client.repo}`;
-      onNotify("Share created successfully.");
+      const details = `Copy Link for Recipient:\n${shareUrl}`;
+      onNotify("Link created.");
       window.navigator.clipboard.writeText(details).catch(() => {});
       progress.textContent = "";
       sharePassword.value = "";
@@ -412,7 +415,7 @@ export function renderOwnerView(root, { onNotify }) {
       await listDrops(root, client);
     } catch (error) {
       progress.textContent = "";
-      renderPasswordError(error.message || "Failed to create Share.");
+      renderPasswordError(error.message || "Failed to create link.");
     }
   });
 
@@ -426,7 +429,7 @@ export async function listDrops(root, providedClient = null) {
   const repo = root.querySelector("#githubRepo")?.value.trim() || DEFAULT_GITHUB_CONFIG.repo;
   const token = root.querySelector("#githubToken")?.value.trim() || "";
   const client = providedClient || new GitHubClient({ owner, repo, token });
-  list.innerHTML = "<p class='muted small'>Loading Shares…</p>";
+  list.innerHTML = "<p class='muted small'>Loading your file groups…</p>";
 
   try {
     const releases = await client.listReleases(50);
@@ -434,7 +437,7 @@ export async function listDrops(root, providedClient = null) {
       .filter((release) => release.tag_name && release.tag_name.startsWith(DROP_ID_PREFIX))
       .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
     if (!shares.length) {
-      list.innerHTML = "<p class='muted small'>No Shares yet.</p>";
+      list.innerHTML = "<p class='muted small'>No files are currently online.</p>";
       return;
     }
     list.innerHTML = shares
@@ -443,7 +446,7 @@ export async function listDrops(root, providedClient = null) {
     list.querySelectorAll("button[data-action='delete-share']").forEach((btn) => {
       btn.addEventListener("click", async () => {
         const id = btn.dataset.releaseId;
-        if (!window.confirm("Delete this Share permanently?\nThe files will no longer be available through this share.")) {
+        if (!window.confirm("Delete these online files permanently?\nThey will no longer be available.")) {
           return;
         }
         try {
@@ -466,7 +469,7 @@ export async function listDrops(root, providedClient = null) {
       });
     });
   } catch (error) {
-    list.innerHTML = `<p class="status status-bad">Unable to list Shares: ${error.message}</p>`;
+    list.innerHTML = `<p class="status status-bad">Unable to load online files: ${error.message}</p>`;
   }
 }
 
@@ -476,16 +479,16 @@ function renderShareCard(client, release) {
   const shareUrl = shareUrlForId(id);
   return `
     <article class="drop-item">
-      <div><strong>${release.name || "Share"}</strong><span class="tag">#${id}</span></div>
+      <div><strong>${release.name || "File group"}</strong><span class="tag">#${id}</span></div>
       <div class="meta small">
-        <span class="status status-ok">active</span>
+        <span class="status status-ok">online</span>
         <span>Created: ${age}</span>
       </div>
-      <div class="small">GitHub release created for this Share.</div>
+      <div class="small">Still online after 7 days — delete when the transfer is complete.</div>
       <div class="row-actions">
-        <button class="btn-plain btn-inline" data-action="copy-share" data-share-url="${shareUrl}">Copy Share Link</button>
-        <button class="btn-ghost btn-inline" data-action="open-share" data-url="${shareUrl}">Open Share</button>
-        <button class="btn-danger btn-inline" data-action="delete-share" data-release-id="${release.id}">Delete Share</button>
+        <button class="btn-plain btn-inline" data-action="copy-share" data-share-url="${shareUrl}">Copy Link for Recipient</button>
+        <button class="btn-ghost btn-inline" data-action="open-share" data-url="${shareUrl}">Open</button>
+        <button class="btn-danger btn-inline" data-action="delete-share" data-release-id="${release.id}">Delete Online Files</button>
       </div>
     </article>
   `;
